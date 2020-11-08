@@ -1,0 +1,478 @@
+#include <Wire.h>
+#include <string.h>
+#include <ctype.h>
+#include <SoftwareSerial.h>
+
+// Software serial TX & RX Pins for the GPS module
+#define SoftrxPin 3
+#define SofttxPin 4
+
+// Initiate the software serial connection
+SoftwareSerial gpsSerial = SoftwareSerial(SoftrxPin, SofttxPin);
+int ledPin = 6; //LED test pin
+int ledPin2 = 5; //LED test pin
+
+// Enable/disable debug modes
+boolean debug_gps = true;
+boolean debug_nxt = true;
+
+// Timer variables
+unsigned long lastRequest = 0; //the number of milliseconds from when the program started running
+int timePassed = 0; //interval time 
+
+//Protocol variables
+int transactionNmr = 0; //which data to transfer
+boolean alive = false; //variable to check if the connection is alive
+boolean confirmed = false; //to check if the datatype is confirmed
+boolean transfer = false; //variable to know when to start transfering
+boolean dataAvailable = false; //variable that checks if there was already data from the gps module
+
+// GPS variables
+int byteGPS=-1; //byte containing current received byte
+char stringGPS[300] = ""; //string containing the total gps string
+int stringGPSPosition = 0; //integer to hold the position of the current current gps character
+char stringCheck[7] = "$GPRMC"; //string to check if they gps string is of the type GPRMC (the string that contains actual information)
+int stringCheckCounter = 0;
+int seperators[13]; //array to hold the location of the commas
+int seperatorCounter = 0; //Integer to store the position of the comma
+
+//GPS Strings
+char gps0[7] = ""; //time in UTC (HhMmSs)
+char gps1 = ' '; //status of the data (A=active, V=invalid)
+char gps2[11] = ""; //latitude
+char gps3 = ' '; //latitude Hemisphere (N/S)
+char gps4[11] = ""; //longitude
+char gps5 = ' '; //longitude Hemisphere (E/W)
+char gps6[4] = ""; //velocity (knots)
+char gps7[7] = ""; //bearing (degrees)
+char gps8[4] = ""; //checksum
+
+void setup()
+{
+  pinMode(ledPin, OUTPUT); //initialize LED pins
+  pinMode(ledPin2, OUTPUT);
+  blinkBothLED(); // blink leds to indicate the program has booted
+  
+  Serial.begin(9600); //start serial for output
+  gpsSerial.begin(4800); //start serial for communication with GPS
+  
+  Wire.begin(127); //join i2c bus with address 127
+  Wire.onRequest(requestEvent); //request event
+
+  for (int i=0;i<300;i++){ // Initialize a buffer for received data
+  stringGPS[i]=' ';
+  }
+
+  Serial.println("Arduino booted");
+}
+
+void loop()
+{
+  //check every 100 ms if the connection is still alive
+  //if the time passed is more then 100 ms, then kill connection
+  if(millis() - lastRequest > 80 && alive)
+  {
+    killTransaction();
+  }
+
+  //poll the GPS module
+  checkGPS();
+}
+
+void requestEvent()
+{
+  //function that is triggered when the I2C master requests data (in this case the NTX)
+  timePassed = millis() - lastRequest; //measure how many timepassed between this request and last request.
+  lastRequest = millis(); // make this request the last request
+  
+  //first check if we have an alive connection
+  if(!alive)
+  //a new transaction starts
+  {
+    digitalWrite(ledPin2, HIGH); //make the LED pin high to show a transaction starts  
+    alive = true; //the connection is alive
+    transactionNmr = 0; //reset datatype to zero
+    transactionNmr++; //start counting
+    Wire.send(0); //send a zero back to master
+  }
+  
+  else if (alive)
+    //a transaction is still running, check which operation to perform based on the delay time
+  {
+    if(timePassed < 30 && !confirmed)
+      //the datatype transaction is not yet finished
+    {
+      if(debug_nxt) {
+      Serial.println(timePassed);
+    }
+    
+    Wire.send(0);
+    transactionNmr++; //increase the datatype
+  }
+
+  else if(timePassed >= 40 && timePassed < 60 && !confirmed)
+    //the transaction number is received, the NXT wants confirmation
+    {
+      transactionNmr = transactionNmr - 1;
+      Wire.send(transactionNmr); //send the understood datatype to master
+      confirmed = true; //confirmed state
+      if(debug_nxt) {
+        Serial.println("confirm");
+      }
+    }
+  
+  else if(confirmed && alive && !transfer )
+    //the actual transaction starts
+    {
+      //first send character to indicate the transaction is starting
+      Wire.send("#");
+      transfer = true;
+      if(debug_nxt) {
+      Serial.println("start");
+      }
+    }
+
+  else if(confirmed && alive && transfer)
+    //the actual transaction starts
+    {
+      //send the correct data, depending on the datatype (the transactionNmr)
+      switch (transactionNmr) {
+      case 0:
+      if(dataAvailable)
+      {
+        Wire.send(gps0);
+      }
+
+  else
+  {
+    Wire.send("error");
+  }
+   
+  if (debug_nxt) {
+    Serial.println("case 0");
+  }
+
+  break;
+case 1:
+  if(dataAvailable)
+  {
+    Wire.send(gps1);
+  }
+
+  else
+  {
+    Wire.send("error");
+  }
+
+  if(debug_nxt) {
+    Serial.println("case 1");
+    Serial.println(gps1);
+    }
+  break;
+
+case 2:
+  if(dataAvailable)
+  {
+    Wire.send(gps2);
+  }
+
+  else
+  {
+    Wire.send("error");
+  }
+
+  if(debug_nxt)
+  {
+    Serial.println("case 2");
+    Serial.println(gps2);
+  }
+break;
+
+case 3:
+  if(dataAvailable)
+  {
+    Wire.send(gps3);
+  }
+
+  else
+  {
+    Wire.send("error");
+  }
+
+  if(debug_nxt) {
+  Serial.println("case 3");
+  }
+break;
+
+case 4:
+if(dataAvailable)
+{
+Wire.send(gps4);
+}
+else
+{
+Wire.send("error");
+}
+if(debug_nxt)
+{
+Serial.println("case 4");
+Serial.println(sizeof(gps4));
+}
+break;
+case 5:
+if(dataAvailable)
+{
+Wire.send(gps5);
+}
+else
+{
+Wire.send("error");
+}
+if(debug_nxt) {
+Serial.println("case 5");
+}
+break;
+case 6:
+if(dataAvailable)
+{
+Wire.send(gps6);
+}
+else
+{
+Wire.send("error");
+}
+if(debug_nxt) {
+Serial.println("case 6");
+}
+break;
+case 7:
+if(dataAvailable)
+{
+Wire.send(gps7);
+}
+else
+{
+Wire.send("error");
+}
+if(debug_nxt) {
+Serial.println("case 7");
+}
+break;
+case 8:
+if(dataAvailable)
+{
+Wire.send(gps8);
+}
+else
+{
+Wire.send("error");
+}
+if(debug_nxt) {
+Serial.println("case 8");
+}
+break;
+default:
+Wire.send("error");
+if(debug_nxt) {
+Serial.println("else");
+}
+break;
+}
+killTransaction(); //transaction finished, kill the connection
+}
+else{
+Wire.send(0);
+}
+}
+}
+void checkGPS() {
+//function to receive GPS data from the module
+digitalWrite(ledPin, LOW); //start by making the LED low
+byteGPS=gpsSerial.read(); //read a byte from the serial port
+if (byteGPS == -1) { //if no data is received, then do nothing
+delay(100);
+}
+else {
+stringGPS[stringGPSPosition]=byteGPS; //if there is serial port data, it is put in the buffer
+stringGPSPosition++; //and the buffer position is increased
+if (byteGPS==13){ //if the received byte is = to 13, end of transmission
+stringGPS[stringGPSPosition+1] = '\0'; //character to end the string
+seperatorCounter = 0; //reset counters
+stringCheckCounter=0;
+for (int i=1;i<7;i++){ //verifies if the received command starts with
+//$GPRMC (this is the data we would like to process)
+if (stringGPS[i]==stringCheck[i-1]){
+stringCheckCounter++;
+}
+}
+if(stringCheckCounter==6){ //if yes, continue and process the data
+boolean firstChecksum = false;
+for (int i=0;i<300;i++){
+if (stringGPS[i]==','){ // check for the position of the "," separator
+if(seperatorCounter < 12)
+{
+seperators[seperatorCounter]=i; //and store the location in the seperators array
+seperatorCounter++;
+}
+}
+if (stringGPS[i]=='*' && !firstChecksum){ // ... and the "*"
+seperators[12]=i;
+firstChecksum = true;
+}
+}
+/*
+the separators array indicate the position of:
+0 = the time in UTC (HhMmSs)
+1 = Status of the data (A=active, V=invalid)
+2 = Latitude
+3 = Latitude Hemisphere (N/S)
+4 = Longitude
+5 = Longitude Hemisphere (E/W)
+6 = Velocity (knots)
+7 = Bearing (degrees)
+8 = date UTC (DdMmAa)
+9 = Magnetic degrees
+12 = Checksum
+*/
+//check if the data is active
+int data = 1;
+for (int j=seperators[data];j<seperators[data+1]-1;j++){
+gps1 = stringGPS[j+1];
+}
+if(gps1 == 'A') //the data is good
+{
+if(debug_gps) {
+Serial.println("------------------");
+}
+dataAvailable = true; //data is availabe, enable this boolean
+digitalWrite(ledPin, HIGH); //enable the LED pin
+emptyStrings(); //empty previous strings
+data = 0; //reset data variables
+int i = 0;
+// Now we will store all the data one by one in seperate variables
+// this makes it possible for the protocol to send the correct variable
+// when requested.
+for (int j=seperators[data];j<seperators[data+1]-1;j++){
+gps0[i] = stringGPS[j+1];
+i++;
+}
+gps0[6] = '\0';
+i = 0;
+data = 2;
+for (int j=seperators[data];j<seperators[data+1]-1;j++) {
+gps2[i] = stringGPS[j+1];
+i++;
+}
+gps2[10] = '\0';
+i = 0;
+data = 3;
+for (int j=seperators[data];j<seperators[data+1]-1;j++) {
+gps3 = stringGPS[j+1];
+i++;
+}
+i = 0;
+data = 4;
+for (int j=seperators[data];j<seperators[data+1]-1;j++) {
+gps4[i] = stringGPS[j+1];
+i++;
+}
+gps4[10] = '\0';
+i = 0;
+data = 5;
+for (int j=seperators[data];j<seperators[data+1]-1;j++) {
+gps5 = stringGPS[j+1];
+}
+i = 0;
+data = 6;
+for (int j=seperators[data];j<seperators[data+1]-1;j++) {
+gps6[i] = stringGPS[j+1];
+i++;
+}
+gps6[3] = '\0';
+i = 0;
+data = 7;
+for (int j=seperators[data];j<seperators[data+1]-1;j++) {
+gps7[i] = stringGPS[j+1];
+i++;
+}
+gps7[6] = '\0';
+i = 0;
+data = 12;
+for (int j=seperators[data];j<seperators[data+1]-1;j++) {
+gps8[i] = stringGPS[j+1];
+i++;
+}
+gps8[3] = '\0';
+if(debug_gps)
+{
+Serial.println(gps0);
+Serial.println(gps1);
+Serial.println(gps2);
+Serial.println(gps3);
+Serial.println(gps4);
+Serial.println(gps5);
+Serial.println(gps6);
+Serial.println(gps7);
+Serial.println(gps8);
+}
+}
+}
+stringGPSPosition = 0;
+// Reset the buffer
+for (int i=0;i<300;i++){ //
+stringGPS[i]=' ';
+}
+}
+}
+}
+void emptyStrings()
+{
+//function to clear all the strings
+for (int i=0;i<7;i++){ //
+gps0[i]=' ';
+}
+gps1 = ' ';
+for (int i=0;i<11;i++){ //
+gps2[i]=' ';
+}
+gps3 = ' ';
+for (int i=0;i<11;i++){ //
+gps4[i]=' ';
+}
+gps5 = ' ';
+for (int i=0;i<4;i++){ //
+gps6[i]=' ';
+}
+for (int i=0;i<7;i++){ //
+gps7[i]=' ';
+}
+for (int i=0;i<4;i++){ //
+gps8[i]=' ';
+}
+}
+void blinkBothLED()
+{
+//function to blink both LEDs
+digitalWrite(ledPin, HIGH);
+digitalWrite(ledPin2, HIGH);
+delay(500);
+digitalWrite(ledPin, LOW);
+digitalWrite(ledPin2, LOW);
+delay(500);
+}
+void killTransaction()
+{
+// Function to kill the transaction, used when a time out occured.
+// or when the data was succesfuly sent.
+if(debug_nxt) {
+Serial.println("transaction stopped");
+}
+if(debug_nxt) {
+Serial.println(" ");
+}
+digitalWrite(ledPin2, LOW);
+alive = false;
+confirmed = false;
+transfer = false;
+transactionNmr = 0;
+}

@@ -1,0 +1,299 @@
+package gps;
+
+import lejos.nxt.I2CPort;
+import lejos.nxt.I2CSensor;
+
+public class GPSSensor extends I2CSensor {
+    
+    public GPSSensor(I2CPort port) {
+        super(port); //override the I2CPort class
+    }
+
+    public String gpsTransaction(int dataType) {
+        //variables
+        String message = ""; // string to hold the output message of this
+                             // function
+        boolean data = false; // boolean to check if the correct datatype
+                              // was received by the sensor
+        int returnInt = 0; // integer that holds the data type received by
+                           // arduino
+
+        byte[] readResponse = new byte[1]; // byte array to store the response
+                                           // from the sensor
+        byte[] readData = new byte[11]; // byte array to store the actual
+                                        // data from the sensor
+        byte byteChar; // single byte used as a buffer
+
+        // Start of I2C connection with the sensor, the address of the sensor
+        // is 127
+        setAddress(127);
+
+        /*
+        * The I2C implementation of Arduino is not able to use registers,
+        * therefore I wrote a protocol which makes it possible to fetch specific
+        * data from the GPS sensor. Steps of the protocol:
+        *
+        * 1. Fast readings within 10ms of each other to decide what kind
+        * of data (e.g. 2 x reading with 10ms break is latitude, 4x reading
+        * is longitude)
+        * 2. A pause of 30ms to indicate the dataType has been
+        * transfered.
+        * 3. Read the sensor to receive an confirmation of the datatype.
+        * 4. Read the sensor to receive byte 35 (character #) to
+        * indicate data transfer starts.
+        * 5. Receive a byte array with the
+        * actual data.
+        */
+
+        // Protocol step 1
+        for (int h = 1; h <= dataType + 1; h++) {
+            getData(0, readResponse, 1);
+            try {
+                Thread.sleep(10);
+            } catch (Exception e) {
+            }
+        }
+
+        // Protocol step 2
+        try {
+            Thread.sleep(30);
+        } catch (Exception E) {
+        }
+
+        // Protocol step 3
+        try {
+            getData(0, readResponse, 1);
+        } catch (Exception e) {
+            readResponse[0] = 0;
+        }
+
+        byteChar = readResponse[0];
+        returnInt = (int) byteChar; // convert byte to int
+
+        if (returnInt == dataType) { // check if the integer received from
+                                     // the sensor is equeal to datatype we
+                                     // want
+
+            data = true;
+        } else {
+            message = "error"; // if the step failed, error message will be
+                               // sent
+            data = false;
+        }
+
+        if (data) { // if there was no error continue with the protocol
+            try {
+                Thread.sleep(10);
+            } catch (Exception e) {
+            }
+
+            // Protocol step 4
+            try {
+                getData(0, readResponse, 1);
+            } catch (Exception e) {
+                readResponse[0] = 0;
+            }
+
+            if (readResponse[0] == 35) // 35 is the # sign, means data transfer
+                                       // is starting here after
+            {
+
+                // Protocol step 5
+                try {
+                    Thread.sleep(10);
+                } catch (Exception e) {
+                }
+
+                try {
+                    getData(0, readData, 11); // reading the string
+                                              //(transfered in bytes) from
+                                              // the sensor
+                } catch (Exception e) {
+                    for (int i = 0; i < readData.length; i++) {
+                        readData[i] = 0;
+                    }
+                }
+
+                for (int j = 0; j < readData.length; j++) {
+
+                    String tempstring = ""; // creating a string of the bytes,
+                                            // by typecasting the bytes to
+                                            // chars
+                    tempstring += (char) readData[j];
+
+                    try {
+                        int tempint = Integer.parseInt(tempstring);
+                        // for current implementation only integers will be
+                        // used, check if it is a string
+                        message += tempstring;
+                    } catch (Exception e) {
+                    }
+                }
+            } else {
+                message = "error";
+            }
+        }
+        return (message);
+    }
+
+    public String doReading(int dataType) {
+        /* this function is a "rescue function" for the actual "gpsTransaction"
+        * function. If the gpsTransaction fails, this function will repeat
+        * for a fixed amount of times.
+        */
+
+        String message = ""; // variable to hold the message by the sensor
+        boolean succes = false;
+        int counter = 0; // counter to see how many times we tried
+
+        while (!succes) {
+            message = gpsTransaction(dataType); // the call to the gps sensor
+                                                // transaction function
+
+            if (counter >= 5) { // if we didn't receive a result for five
+                                // times, we stop trying for this call
+                message = "timeout";
+            }
+
+            if (message.equals("error")) {
+            // if an error is received by the gps transaction function, then
+            // we didn't succeed
+                succes = false;
+                message = "error";
+            } else {
+            // otherwise we succeeded and we can stop trying.
+                succes = true;
+            }
+
+            counter++;
+
+            try {
+                /*
+                * pause for a short while before trying again.
+                * Keep in mind that the total repetitions of this function
+                * shouldn't be larger then the time between sensor readings.
+                */
+                Thread.sleep(100);
+            } catch (Exception e) {
+            }
+        }
+
+        return (message);
+    }
+
+    public float toDecimalDegrees(String x, String type) {
+        /*
+        * The latitude and longitude variables from the gps sensor are in
+        * the degrees, minutes format.
+        * To be able to do calculations with it we need to convert them to
+        * decimal degrees.
+        * We can do this by splitting the degrees and minutes part, and diving
+        * the minutes part by 60.
+        */
+        float degrees = 0.0f;
+        float minutes = 0.0f;
+        float decimals = 0.0f;
+        String temp;
+
+        if (type.equals("lat")) {
+            try {
+                degrees = Integer.parseInt(x.substring(0, 2));
+                temp = x.substring(2, 4) + "." + x.substring(4, x.length());
+                minutes = Float.parseFloat(temp);
+                minutes = minutes / 60;
+                decimals = degrees + minutes;
+            } catch (Exception e) {
+                decimals = 0.0f;
+            }
+        } else if (type.equals("long")) {
+            try {
+                degrees = Integer.parseInt(x.substring(0, 3));
+                temp = x.substring(3, 5) + "." + x.substring(5, x.length());
+                minutes = Float.parseFloat(temp);
+                minutes = minutes / 60;
+                decimals = degrees + minutes;
+            } catch (Exception e) {
+                decimals = 0.0f;
+            }
+        }
+        return decimals;
+    }
+
+    public float calculateBearing(double lat_from, double long_from,
+            double lat_to, double long_to) {
+        /*
+        * The bearing is the angle between two latitude, longitude points.
+        * this is needed to navigate the robot to the right direction.
+        */
+
+        // first all the points in degrees are calculated into radians
+        double lat_from_rad = Math.toRadians(lat_from);
+        double lat_to_rad = Math.toRadians(lat_to);
+        double long_from_rad = Math.toRadians(long_from);
+        double long_to_rad = Math.toRadians(long_to);
+
+        // the distance between the two longitude points
+        double dLong = long_to_rad - long_from_rad;
+
+        // calculation of the bearing angle
+        double y = Math.sin(dLong) * Math.cos(lat_to_rad);
+        double x = Math.cos(lat_from_rad) * Math.sin(lat_to_rad)
+                - Math.sin(lat_from_rad) * Math.cos(lat_to_rad)
+                * Math.cos(dLong);
+        return toBearing((float) (Math.atan2(y, x)));
+    }
+
+    public double calculateDistance(double lat1, double lon1, double lat2,
+            double lon2) {
+        /* calculation of the distance using two latitude longitude points
+        * using the spherical law of cosines. This formula uses a spherical
+        * model of the earth.
+        */
+
+        double L1 = lat1;
+        double G1 = lon1;
+        double L2 = lat2;
+        double G2 = lon2;
+
+        // convert to radians
+        L1 = Math.toRadians(L1);
+        L2 = Math.toRadians(L2);
+        G1 = Math.toRadians(G1);
+        G2 = Math.toRadians(G2);
+
+        double a = Math.pow(Math.sin((L2 - L1) / 2), 2) + Math.cos(L1)
+                * Math.cos(L2) * Math.pow(Math.sin((G2 - G1) / 2), 2);
+
+        // great circle distance in radians
+        double angle = Math.toDegrees(Math.sqrt(a));
+
+        // each degree on a great circle of Earth is 60 nautical miles (111120
+        // meters)
+        double distance = 111120 * angle;
+        return distance;
+    }
+
+    public boolean inRange(double lat1, double lon1, double lat2,
+            double lon2) {
+        /* a method to see if the robot is in range of a latitude longitude
+        * point that uses less computing power. This is necessary because
+        * both the Haversine and the spherical law of cosines can not be
+        * computed by Lejos.
+        */
+        boolean inrange = false;
+        float difference_lat = (float)Math.abs(lat2 - lat1);
+        float difference_lon = (float)Math.abs(lon2 - lon1);
+        if(difference_lat < 0.0001 && difference_lon < 0.0001)
+        {
+            inrange = true;
+        }
+
+        return inrange;
+    }
+
+    private float toBearing(float rad) // convert radians to degrees (as
+    // bearing: 0...360)
+    {
+        return (float) ((int) (Math.toDegrees(rad)) % 360);
+    }
+}
